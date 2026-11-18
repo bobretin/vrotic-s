@@ -3,12 +3,16 @@ using UnityEngine;
 
 namespace MultiBar.Liquids
 {
-    /// <summary>Stores liquid volume and ingredient proportions for one vessel.</summary>
+    /// <summary>
+    /// Stores the exact volume of every ingredient in this vessel.
+    /// The visible colour is a smoothed, volume-weighted mixture of those ingredients.
+    /// </summary>
+    [DisallowMultipleComponent]
     public class LiquidContainer : MonoBehaviour
     {
         [Header("Capacity (ml)")]
-        [Min(1f)] [SerializeField] private float capacity = 750f;
-        [Min(0f)] [SerializeField] private float startingVolume = 600f;
+        [SerializeField, Min(1f)] private float capacity = 750f;
+        [SerializeField, Min(0f)] private float startingVolume = 600f;
         [SerializeField] private string ingredientId = "juice";
         [SerializeField] private Color ingredientColor = new Color(1f, 0.32f, 0.04f, 1f);
 
@@ -16,8 +20,11 @@ namespace MultiBar.Liquids
         [SerializeField] private Transform liquidVisual;
         [SerializeField] private Renderer liquidRenderer;
         [SerializeField] private LiquidVolumeMesh liquidVolumeMesh;
-        [Tooltip("If enabled, the bottom of the liquid mesh stays fixed while its height changes.")]
         [SerializeField] private bool anchorAtBottom = true;
+
+        [Header("Mixture appearance")]
+        [Tooltip("How quickly the visible liquid colour blends into the new mixture colour.")]
+        [SerializeField, Min(0.1f)] private float colourBlendSpeed = 5f;
 
         private readonly Dictionary<string, float> ingredients = new Dictionary<string, float>();
         private readonly Dictionary<string, Color> ingredientColors = new Dictionary<string, Color>();
@@ -25,7 +32,8 @@ namespace MultiBar.Liquids
         private Vector3 fullPosition;
         private float bottomLocalY;
         private float currentVolume;
-        private Color mixtureColor;
+        private Color mixtureColor = new Color(0.2f, 0.6f, 1f, 1f);
+        private Color visualMixtureColor = new Color(0.2f, 0.6f, 1f, 1f);
         private MaterialPropertyBlock propertyBlock;
         private bool initialized;
 
@@ -36,7 +44,32 @@ namespace MultiBar.Liquids
         public IReadOnlyDictionary<string, float> Ingredients => ingredients;
         public string IngredientId => ingredientId;
         public Color IngredientColor => ingredientColor;
+        /// <summary>Logical mixture colour, used by the pouring stream.</summary>
         public Color MixtureColor => mixtureColor;
+        /// <summary>Smoothed colour currently applied to the liquid renderer.</summary>
+        public Color VisualMixtureColor => visualMixtureColor;
+
+        #if UNITY_EDITOR
+        private void OnValidate()
+        {
+            if (Application.isPlaying)
+                return;
+
+            if (liquidVisual == null)
+                return;
+
+            if (liquidRenderer == null)
+                liquidRenderer = liquidVisual.GetComponent<Renderer>();
+
+            if (liquidRenderer == null)
+                return;
+
+            mixtureColor = ingredientColor;
+            visualMixtureColor = ingredientColor;
+
+            ApplyVisualColor();
+        }
+        #endif
 
         private void Awake()
         {
@@ -53,6 +86,14 @@ namespace MultiBar.Liquids
             }
         }
 
+        private void Update()
+        {
+            if (!initialized) return;
+            float blend = 1f - Mathf.Exp(-colourBlendSpeed * Time.deltaTime);
+            visualMixtureColor = Color.Lerp(visualMixtureColor, mixtureColor, blend);
+            ApplyVisualColor();
+        }
+
         private void CacheVisualGeometry()
         {
             if (liquidVisual != null)
@@ -60,28 +101,31 @@ namespace MultiBar.Liquids
                 fullScale = liquidVisual.localScale;
                 fullPosition = liquidVisual.localPosition;
                 bottomLocalY = fullPosition.y - fullScale.y;
-                liquidRenderer = liquidVisual.GetComponent<Renderer>();
-                liquidVolumeMesh = liquidVisual.GetComponent<LiquidVolumeMesh>();
+                if (liquidRenderer == null) liquidRenderer = liquidVisual.GetComponent<Renderer>();
+                if (liquidVolumeMesh == null) liquidVolumeMesh = liquidVisual.GetComponent<LiquidVolumeMesh>();
             }
             if (propertyBlock == null) propertyBlock = new MaterialPropertyBlock();
         }
 
         private void InitializeContents()
         {
+            capacity = Mathf.Max(1f, capacity);
             currentVolume = Mathf.Clamp(startingVolume, 0f, capacity);
             ingredients.Clear();
             ingredientColors.Clear();
             if (currentVolume > 0f)
             {
-                ingredients[ingredientId] = currentVolume;
-                ingredientColors[ingredientId] = ingredientColor;
+                string id = string.IsNullOrWhiteSpace(ingredientId) ? "ingredient" : ingredientId;
+                ingredients[id] = currentVolume;
+                ingredientColors[id] = ingredientColor;
             }
             initialized = true;
             RecalculateColor();
+            visualMixtureColor = mixtureColor;
             RefreshVisuals();
         }
 
-        /// <summary>Called by the Editor setup utility and safe to call before Play Mode.</summary>
+        /// <summary>Used by setup tools; retained for compatibility with existing scene objects.</summary>
         public void Configure(float newCapacity, float initialVolume, string id, Color color, Transform visual)
         {
             capacity = Mathf.Max(1f, newCapacity);
@@ -95,11 +139,13 @@ namespace MultiBar.Liquids
             InitializeContents();
         }
 
+        /// <summary>Adds one ingredient and returns the volume that was actually accepted.</summary>
         public float AddColoredLiquid(string id, float requestedAmount, Color color)
         {
             float accepted = Mathf.Min(Mathf.Max(0f, requestedAmount), RemainingSpace);
             if (accepted <= 0.0001f) return 0f;
             if (string.IsNullOrWhiteSpace(id)) id = "unknown";
+
             if (!ingredients.ContainsKey(id)) ingredients[id] = 0f;
             ingredients[id] += accepted;
             ingredientColors[id] = color;
@@ -114,14 +160,25 @@ namespace MultiBar.Liquids
             return AddColoredLiquid(id, requestedAmount, color);
         }
 
-        /// <summary>Removes a proportional share of every ingredient in a mixed vessel.</summary>
+        /// <summary>Returns the current amount of a particular ingredient in millilitres.</summary>
+        public float GetIngredientAmount(string id)
+        {
+            return !string.IsNullOrEmpty(id) && ingredients.TryGetValue(id, out float amount) ? amount : 0f;
+        }
+
+        /// <summary>Returns the fraction (0..1) of the total mixture made up by an ingredient.</summary>
+        public float GetIngredientFraction(string id)
+        {
+            return currentVolume <= 0.0001f ? 0f : GetIngredientAmount(id) / currentVolume;
+        }
+
+        /// <summary>Removes a proportional share of every ingredient in this vessel.</summary>
         public float RemoveLiquid(float requestedAmount)
         {
             float removed = Mathf.Min(Mathf.Max(0f, requestedAmount), currentVolume);
             if (removed <= 0.0001f) return 0f;
 
-            float before = currentVolume;
-            float ratio = removed / before;
+            float ratio = removed / currentVolume;
             var keys = new List<string>(ingredients.Keys);
             foreach (string key in keys)
             {
@@ -135,32 +192,32 @@ namespace MultiBar.Liquids
             return removed;
         }
 
-        /// <summary>Moves a proportional share of every ingredient to another vessel.</summary>
+        /// <summary>
+        /// Moves a proportional share of every ingredient to another vessel.
+        /// Ingredient identities and their original colours are preserved.
+        /// </summary>
         public float TransferTo(LiquidContainer target, float requestedAmount)
         {
             if (target == null || target == this) return 0f;
             float amount = Mathf.Min(Mathf.Max(0f, requestedAmount), currentVolume, target.RemainingSpace);
             if (amount <= 0.0001f) return 0f;
 
-            float before = currentVolume;
-            float ratio = amount / before;
-            var keys = new List<string>(ingredients.Keys);
-            var moved = new List<KeyValuePair<string, float>>(keys.Count);
-            foreach (string key in keys)
+            float ratio = amount / currentVolume;
+            var moved = new List<KeyValuePair<string, KeyValuePair<float, Color>>>(ingredients.Count);
+            foreach (KeyValuePair<string, float> item in ingredients)
             {
-                float part = ingredients[key] * ratio;
-                Color color = ingredientColors.TryGetValue(key, out Color stored) ? stored : ingredientColor;
-                moved.Add(new KeyValuePair<string, float>(key, part));
-                ingredientColors[key] = color;
+                float part = item.Value * ratio;
+                Color color = ingredientColors.TryGetValue(item.Key, out Color stored) ? stored : ingredientColor;
+                moved.Add(new KeyValuePair<string, KeyValuePair<float, Color>>(
+                    item.Key, new KeyValuePair<float, Color>(part, color)));
             }
 
             float removed = RemoveLiquid(amount);
             if (removed <= 0.0001f) return 0f;
-            foreach (KeyValuePair<string, float> part in moved)
-            {
-                Color color = ingredientColors.TryGetValue(part.Key, out Color stored) ? stored : ingredientColor;
-                target.AddColoredLiquid(part.Key, part.Value, color);
-            }
+
+            foreach (var item in moved)
+                target.AddColoredLiquid(item.Key, item.Value.Key, item.Value.Value);
+
             return removed;
         }
 
@@ -174,13 +231,18 @@ namespace MultiBar.Liquids
                 return;
             }
 
-            Color sum = Color.black;
+            // Blend in linear colour space so the result is stable across different
+            // ingredient ratios and does not depend on the order in which they were poured.
+            Color linearSum = Color.black;
             foreach (KeyValuePair<string, float> item in ingredients)
             {
-                Color c = ingredientColors.TryGetValue(item.Key, out Color stored) ? stored : ingredientColor;
-                sum += c * item.Value;
+                Color source = ingredientColors.TryGetValue(item.Key, out Color stored) ? stored : ingredientColor;
+                Color linear = source.linear;
+                linearSum += new Color(linear.r, linear.g, linear.b, 1f) * item.Value;
             }
-            mixtureColor = sum / Mathf.Max(0.0001f, currentVolume);
+
+            Color mixedLinear = linearSum / Mathf.Max(0.0001f, currentVolume);
+            mixtureColor = mixedLinear.gamma;
             mixtureColor.a = 1f;
         }
 
@@ -191,8 +253,6 @@ namespace MultiBar.Liquids
                 float fill = Fill01;
                 if (liquidVolumeMesh != null)
                 {
-                    // The volumetric mesh builds its own closed side walls and top/bottom caps.
-                    // Do not scale the mesh Transform: its geometry is already generated in vessel space.
                     liquidVisual.localPosition = Vector3.zero;
                     liquidVisual.localRotation = Quaternion.identity;
                     liquidVisual.localScale = Vector3.one;
@@ -201,13 +261,12 @@ namespace MultiBar.Liquids
                 }
                 else
                 {
-                    // Legacy cylinder fallback for vessels that do not use LiquidVolumeMesh.
                     if (anchorAtBottom)
                     {
                         liquidVisual.localScale = new Vector3(fullScale.x, Mathf.Max(0.0001f, fullScale.y * fill), fullScale.z);
-                        Vector3 p = fullPosition;
-                        p.y = bottomLocalY + fullScale.y * fill;
-                        liquidVisual.localPosition = p;
+                        Vector3 position = fullPosition;
+                        position.y = bottomLocalY + fullScale.y * fill;
+                        liquidVisual.localPosition = position;
                     }
                     else
                     {
@@ -217,17 +276,21 @@ namespace MultiBar.Liquids
                 }
             }
 
-            if (liquidRenderer != null)
+            ApplyVisualColor();
+        }
+
+        private void ApplyVisualColor()
+        {
+            if (liquidRenderer == null) return;
+            if (propertyBlock == null) propertyBlock = new MaterialPropertyBlock();
+            liquidRenderer.GetPropertyBlock(propertyBlock);
+            Material material = liquidRenderer.sharedMaterial;
+            if (material != null)
             {
-                if (propertyBlock == null) propertyBlock = new MaterialPropertyBlock();
-                liquidRenderer.GetPropertyBlock(propertyBlock);
-                if (liquidRenderer.sharedMaterial != null)
-                {
-                    if (liquidRenderer.sharedMaterial.HasProperty("_BaseColor")) propertyBlock.SetColor("_BaseColor", mixtureColor);
-                    if (liquidRenderer.sharedMaterial.HasProperty("_Color")) propertyBlock.SetColor("_Color", mixtureColor);
-                }
-                liquidRenderer.SetPropertyBlock(propertyBlock);
+                if (material.HasProperty("_BaseColor")) propertyBlock.SetColor("_BaseColor", visualMixtureColor);
+                if (material.HasProperty("_Color")) propertyBlock.SetColor("_Color", visualMixtureColor);
             }
+            liquidRenderer.SetPropertyBlock(propertyBlock);
         }
     }
 }

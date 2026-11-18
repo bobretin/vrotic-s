@@ -4,7 +4,7 @@ namespace MultiBar.Liquids
 {
     /// <summary>
     /// Transfers liquid from this vessel to the first valid vessel below the pour point.
-    /// Stream and droplets always use the current source mixture colour.
+    /// Stream and optional droplets are tinted from the source's current mixture colour.
     /// </summary>
     [DisallowMultipleComponent]
     public class PouringSource : MonoBehaviour
@@ -34,16 +34,12 @@ namespace MultiBar.Liquids
         public bool IsPouring => pouring;
         public void SetFlowRate(float value) => flowRate = Mathf.Max(0.1f, value);
 
-        private void Reset()
-        {
-            container = GetComponent<LiquidContainer>();
-        }
+        private void Reset() => container = GetComponent<LiquidContainer>();
 
         private void Awake()
         {
             if (container == null) container = GetComponent<LiquidContainer>();
             PrepareStreamRenderer();
-
             if (droplets != null)
                 droplets.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
         }
@@ -62,14 +58,12 @@ namespace MultiBar.Liquids
             stream.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
             stream.receiveShadows = false;
 
-            // Give this source its own neutral material. The actual liquid colour is
-            // supplied through LineRenderer vertex colours, which avoids stale material
-            // tints when a shaker's mixture changes during gameplay.
+            // Clone the assigned material so each bottle/shaker can tint its own stream.
+            // The material itself receives the mixture colour; line vertex colours stay white
+            // to avoid a shader multiplying two different tints or ignoring vertex colours.
             Material sourceMaterial = stream.sharedMaterial;
             if (sourceMaterial != null)
-            {
                 runtimeStreamMaterial = new Material(sourceMaterial);
-            }
             else
             {
                 Shader shader = Shader.Find("Universal Render Pipeline/Unlit");
@@ -84,6 +78,8 @@ namespace MultiBar.Liquids
                 stream.sharedMaterial = runtimeStreamMaterial;
             }
 
+            stream.startColor = Color.white;
+            stream.endColor = Color.white;
             stream.enabled = false;
         }
 
@@ -104,7 +100,6 @@ namespace MultiBar.Liquids
 
             Vector3 origin = pourPoint.position;
             PouringTarget target = FindTarget(origin, Vector3.down, out Vector3 hitPoint);
-
             if (target == null || target.Container == null || target.Container == container ||
                 target.Container.RemainingSpace <= 0.001f)
             {
@@ -113,17 +108,16 @@ namespace MultiBar.Liquids
             }
 
             animationTime += Time.deltaTime;
-            Color currentLiquidColor = container.MixtureColor;
-            UpdateStream(origin, hitPoint, currentLiquidColor);
-            UpdateDropletColor(currentLiquidColor);
+            Color sourceMixtureColor = container.MixtureColor;
+            UpdateStream(origin, hitPoint, sourceMixtureColor);
+            UpdateDropletColor(sourceMixtureColor);
 
             if (!pouring && droplets != null) droplets.Play();
             pouring = true;
 
-            // The source loses exactly the amount the target can accept.
+            // Never consume more than the receiver can accept.
             float transferable = Mathf.Min(flowRate * Time.deltaTime,
                 container.CurrentVolume, target.Container.RemainingSpace);
-
             if (transferable > 0.0001f)
                 container.TransferTo(target.Container, transferable);
 
@@ -137,14 +131,12 @@ namespace MultiBar.Liquids
             int hitCount = Physics.RaycastNonAlloc(origin, direction, rayHits, rayDistance,
                 targetLayers, QueryTriggerInteraction.Ignore);
 
-            // RaycastNonAlloc does not guarantee hit order. Select the nearest external collider.
             int nearestIndex = -1;
             float nearestDistance = float.MaxValue;
             for (int i = 0; i < hitCount; i++)
             {
                 Transform hitTransform = rayHits[i].collider.transform;
                 if (hitTransform == transform || hitTransform.IsChildOf(transform)) continue;
-
                 if (rayHits[i].distance < nearestDistance)
                 {
                     nearestDistance = rayHits[i].distance;
@@ -153,25 +145,23 @@ namespace MultiBar.Liquids
             }
 
             if (nearestIndex < 0) return null;
-
             RaycastHit nearestHit = rayHits[nearestIndex];
             endPoint = nearestHit.point;
-            // A non-vessel collider blocks the stream; never pour through the counter or props.
             return nearestHit.collider.GetComponentInParent<PouringTarget>();
         }
 
         private void UpdateStream(Vector3 start, Vector3 end, Color liquidColor)
         {
             if (stream == null) return;
-
             stream.enabled = true;
             stream.positionCount = streamSegments;
-            // Keep the material neutral and tint the LineRenderer vertices from the
-            // current source mixture. This works for every source vessel, including a
-            // shaker whose colour changes as ingredients are mixed.
-            SetMaterialColor(runtimeStreamMaterial, Color.white);
-            stream.startColor = new Color(liquidColor.r, liquidColor.g, liquidColor.b, 0.96f);
-            stream.endColor = new Color(liquidColor.r, liquidColor.g, liquidColor.b, 0.78f);
+
+            Color tint = liquidColor;
+            tint.a = 0.96f;
+            SetMaterialColor(runtimeStreamMaterial, tint);
+            // Keep vertex tint white: the runtime material is the single source of colour.
+            stream.startColor = Color.white;
+            stream.endColor = new Color(1f, 1f, 1f, 0.82f);
 
             Vector3 axis = end - start;
             Vector3 side = Vector3.Cross(axis.normalized, Vector3.forward);
@@ -186,7 +176,6 @@ namespace MultiBar.Liquids
                 float wobble = Mathf.Sin(animationTime * 13f + t * 11f) * streamWobble * envelope;
                 points[i] = Vector3.Lerp(start, end, t) + side * wobble;
             }
-
             for (int i = 0; i < streamSegments; i++)
                 stream.SetPosition(i, points[i]);
         }
