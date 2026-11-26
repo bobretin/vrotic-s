@@ -524,6 +524,8 @@ MonoBehaviour:
   targetLayers:
     serializedVersion: 2
     m_Bits: 4294967295
+  batchInterval: 0.06
+  streamSpeed: 2.5
   stream: {fileID: 170032776}
   streamWidth: 0.022
   streamSegments: 12
@@ -679,6 +681,7 @@ MonoBehaviour:
   liquidVolumeMesh: {fileID: 0}
   anchorAtBottom: 1
   colourBlendSpeed: 5
+  mixingDuration: 1.8
 --- !u!136 &59471794
 CapsuleCollider:
   m_ObjectHideFlags: 0
@@ -3368,6 +3371,11 @@ MonoBehaviour:
   radiusFactor: 0.82
   bottomMargin: 0.025
   topMargin: 0.045
+  rebuildsPerSecond: 30
+  surfaceResponse: 11
+  fillResponse: 18
+  maximumSloshAngle: 3.5
+  sloshDecay: 3.5
 --- !u!1 &329674977
 GameObject:
   m_ObjectHideFlags: 0
@@ -4000,6 +4008,7 @@ MonoBehaviour:
   liquidVolumeMesh: {fileID: 0}
   anchorAtBottom: 1
   colourBlendSpeed: 5
+  mixingDuration: 1.8
 --- !u!136 &384837443
 CapsuleCollider:
   m_ObjectHideFlags: 0
@@ -4172,6 +4181,8 @@ MonoBehaviour:
   targetLayers:
     serializedVersion: 2
     m_Bits: 4294967295
+  batchInterval: 0.06
+  streamSpeed: 2.5
   stream: {fileID: 384837444}
   streamWidth: 0.018
   streamSegments: 8
@@ -8027,6 +8038,8 @@ MonoBehaviour:
   targetLayers:
     serializedVersion: 2
     m_Bits: 4294967295
+  batchInterval: 0.06
+  streamSpeed: 2.5
   stream: {fileID: 1409371618}
   streamWidth: 0.022
   streamSegments: 12
@@ -8182,6 +8195,7 @@ MonoBehaviour:
   liquidVolumeMesh: {fileID: 0}
   anchorAtBottom: 1
   colourBlendSpeed: 5
+  mixingDuration: 1.8
 --- !u!136 &693805901
 CapsuleCollider:
   m_ObjectHideFlags: 0
@@ -10753,6 +10767,11 @@ MonoBehaviour:
   radiusFactor: 0.82
   bottomMargin: 0.025
   topMargin: 0.045
+  rebuildsPerSecond: 30
+  surfaceResponse: 11
+  fillResponse: 18
+  maximumSloshAngle: 3.5
+  sloshDecay: 3.5
 --- !u!1 &908128896
 GameObject:
   m_ObjectHideFlags: 0
@@ -12385,6 +12404,8 @@ MonoBehaviour:
   targetLayers:
     serializedVersion: 2
     m_Bits: 4294967295
+  batchInterval: 0.06
+  streamSpeed: 2.5
   stream: {fileID: 1531970875}
   streamWidth: 0.022
   streamSegments: 12
@@ -12540,6 +12561,7 @@ MonoBehaviour:
   liquidVolumeMesh: {fileID: 0}
   anchorAtBottom: 1
   colourBlendSpeed: 5
+  mixingDuration: 1.8
 --- !u!136 &1097429005
 CapsuleCollider:
   m_ObjectHideFlags: 0
@@ -18752,6 +18774,7 @@ MonoBehaviour:
   liquidVolumeMesh: {fileID: 0}
   anchorAtBottom: 1
   colourBlendSpeed: 5
+  mixingDuration: 1.8
 --- !u!136 &1746124082
 CapsuleCollider:
   m_ObjectHideFlags: 0
@@ -18924,6 +18947,8 @@ MonoBehaviour:
   targetLayers:
     serializedVersion: 2
     m_Bits: 4294967295
+  batchInterval: 0.06
+  streamSpeed: 2.5
   stream: {fileID: 1746124083}
   streamWidth: 0.022
   streamSegments: 12
@@ -20490,7 +20515,7 @@ Transform:
   m_GameObject: {fileID: 1955153460}
   serializedVersion: 2
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: 0.861, y: 1.018, z: 2.391}
+  m_LocalPosition: {x: 0.861, y: 0.98, z: 2.391}
   m_LocalScale: {x: 0.34114498, y: 0.34114498, z: 0.34114498}
   m_ConstrainProportionsScale: 0
   m_Children:
@@ -20520,6 +20545,8 @@ MonoBehaviour:
   targetLayers:
     serializedVersion: 2
     m_Bits: 4294967295
+  batchInterval: 0.06
+  streamSpeed: 2.5
   stream: {fileID: 712437214}
   streamWidth: 0.022
   streamSegments: 12
@@ -20675,6 +20702,7 @@ MonoBehaviour:
   liquidVolumeMesh: {fileID: 0}
   anchorAtBottom: 1
   colourBlendSpeed: 5
+  mixingDuration: 1.8
 --- !u!136 &1955153465
 CapsuleCollider:
   m_ObjectHideFlags: 0
