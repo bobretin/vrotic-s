@@ -3,8 +3,8 @@ using UnityEngine;
 namespace MultiBar.Liquids
 {
     /// <summary>
-    /// Transfers liquid from this vessel to the first valid vessel below the pour point.
-    /// Stream and optional droplets are tinted from the source's current mixture colour.
+    /// Emits ingredient payloads from a wet mouth and delivers them after flight.
+    /// The stream follows gravity; the receiver does not gain volume instantly.
     /// </summary>
     [DisallowMultipleComponent]
     public class PouringSource : MonoBehaviour
@@ -16,6 +16,8 @@ namespace MultiBar.Liquids
         [SerializeField, Min(0.1f)] private float flowRate = 25f;
         [SerializeField, Min(0.1f)] private float rayDistance = 2.5f;
         [SerializeField] private LayerMask targetLayers = ~0;
+        [SerializeField, Min(0.02f)] private float batchInterval = 0.06f;
+        [SerializeField, Min(0.1f)] private float streamSpeed = 2.5f;
 
         [Header("Stream appearance")]
         [SerializeField] private LineRenderer stream;
@@ -26,12 +28,16 @@ namespace MultiBar.Liquids
 
         private readonly Vector3[] points = new Vector3[20];
         private readonly RaycastHit[] rayHits = new RaycastHit[32];
+        private readonly PouringFlightQueue flightQueue = new PouringFlightQueue();
         private float animationTime;
+        private float batchTime;
+        private float lastFlightTime = 0.08f;
         private bool pouring;
         private Material runtimeStreamMaterial;
 
         public float FlowRate => flowRate;
         public bool IsPouring => pouring;
+        public int InFlightBatchCount => flightQueue.Count;
         public void SetFlowRate(float value) => flowRate = Mathf.Max(0.1f, value);
 
         private void Reset() => container = GetComponent<LiquidContainer>();
@@ -58,9 +64,6 @@ namespace MultiBar.Liquids
             stream.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
             stream.receiveShadows = false;
 
-            // Clone the assigned material so each bottle/shaker can tint its own stream.
-            // The material itself receives the mixture colour; line vertex colours stay white
-            // to avoid a shader multiplying two different tints or ignoring vertex colours.
             Material sourceMaterial = stream.sharedMaterial;
             if (sourceMaterial != null)
                 runtimeStreamMaterial = new Material(sourceMaterial);
@@ -85,6 +88,9 @@ namespace MultiBar.Liquids
 
         private void Update()
         {
+            float deltaTime = Mathf.Max(0f, Time.deltaTime);
+            flightQueue.Advance(deltaTime);
+
             if (container == null || pourPoint == null || container.CurrentVolume <= 0.001f)
             {
                 StopPour();
@@ -98,31 +104,49 @@ namespace MultiBar.Liquids
                 return;
             }
 
-            Vector3 origin = pourPoint.position;
-            PouringTarget target = FindTarget(origin, Vector3.down, out Vector3 hitPoint);
-            if (target == null || target.Container == null || target.Container == container ||
-                target.Container.RemainingSpace <= 0.001f)
+            if (!container.TryGetWetOpening(pourPoint.position, out Vector3 origin))
             {
                 StopPour();
                 return;
             }
 
-            animationTime += Time.deltaTime;
+            PouringTarget target = FindTarget(origin, Vector3.down, out Vector3 hitPoint);
+            if (target == null || target.Container == null || target.Container == container)
+            {
+                StopPour();
+                return;
+            }
+
+            float availableSpace = target.Container.RemainingSpace - flightQueue.PendingVolumeFor(target.Container);
+            if (availableSpace <= 0.001f)
+            {
+                StopPour();
+                return;
+            }
+
+            animationTime += deltaTime;
+            lastFlightTime = CalculateFlightTime(origin, hitPoint);
             Color sourceMixtureColor = container.MixtureColor;
             UpdateStream(origin, hitPoint, sourceMixtureColor);
             UpdateDropletColor(sourceMixtureColor);
 
             if (!pouring && droplets != null) droplets.Play();
             pouring = true;
+            batchTime += deltaTime;
 
-            // Never consume more than the receiver can accept.
-            float transferable = Mathf.Min(flowRate * Time.deltaTime,
-                container.CurrentVolume, target.Container.RemainingSpace);
-            if (transferable > 0.0001f)
-                container.TransferTo(target.Container, transferable);
+            if (batchTime >= batchInterval)
+            {
+                float batchDuration = batchTime;
+                batchTime = 0f;
+                float amount = Mathf.Min(flowRate * batchDuration, container.CurrentVolume, availableSpace);
+                if (amount > 0.0001f)
+                {
+                    LiquidPayload payload = container.ExtractLiquid(amount);
+                    flightQueue.Enqueue(container, target.Container, payload, lastFlightTime);
+                }
+            }
 
-            if (target.Container.RemainingSpace <= 0.001f || container.CurrentVolume <= 0.001f)
-                StopPour();
+            if (container.CurrentVolume <= 0.001f) StopPour();
         }
 
         private PouringTarget FindTarget(Vector3 origin, Vector3 direction, out Vector3 endPoint)
@@ -150,34 +174,43 @@ namespace MultiBar.Liquids
             return nearestHit.collider.GetComponentInParent<PouringTarget>();
         }
 
+        private float CalculateFlightTime(Vector3 start, Vector3 end)
+        {
+            return Mathf.Clamp(Vector3.Distance(start, end) / Mathf.Max(0.1f, streamSpeed), 0.08f, 0.45f);
+        }
+
         private void UpdateStream(Vector3 start, Vector3 end, Color liquidColor)
         {
             if (stream == null) return;
             stream.enabled = true;
             stream.positionCount = streamSegments;
+            float widthScale = Mathf.Clamp(Mathf.Sqrt(flowRate / 25f), 0.45f, 1.5f);
+            stream.startWidth = streamWidth * widthScale;
+            stream.endWidth = streamWidth * 0.65f * widthScale;
 
             Color tint = liquidColor;
             tint.a = 0.96f;
             SetMaterialColor(runtimeStreamMaterial, tint);
-            // Keep vertex tint white: the runtime material is the single source of colour.
             stream.startColor = Color.white;
             stream.endColor = new Color(1f, 1f, 1f, 0.82f);
 
+            float flightTime = CalculateFlightTime(start, end);
+            Vector3 gravity = Physics.gravity;
+            Vector3 velocity = (end - start - 0.5f * gravity * flightTime * flightTime) / flightTime;
             Vector3 axis = end - start;
             Vector3 side = Vector3.Cross(axis.normalized, Vector3.forward);
-            if (side.sqrMagnitude < 0.01f)
-                side = Vector3.Cross(axis.normalized, Vector3.right);
+            if (side.sqrMagnitude < 0.01f) side = Vector3.Cross(axis.normalized, Vector3.right);
             side.Normalize();
 
             for (int i = 0; i < streamSegments; i++)
             {
                 float t = i / (float)(streamSegments - 1);
+                float time = t * flightTime;
                 float envelope = Mathf.Sin(t * Mathf.PI);
                 float wobble = Mathf.Sin(animationTime * 13f + t * 11f) * streamWobble * envelope;
-                points[i] = Vector3.Lerp(start, end, t) + side * wobble;
+                points[i] = start + velocity * time + 0.5f * gravity * time * time + side * wobble;
             }
-            for (int i = 0; i < streamSegments; i++)
-                stream.SetPosition(i, points[i]);
+            for (int i = 0; i < streamSegments; i++) stream.SetPosition(i, points[i]);
         }
 
         private void UpdateDropletColor(Color liquidColor)
@@ -197,13 +230,21 @@ namespace MultiBar.Liquids
         private void StopPour()
         {
             pouring = false;
+            batchTime = 0f;
             if (stream != null) stream.enabled = false;
             if (droplets != null && droplets.isPlaying)
                 droplets.Stop(true, ParticleSystemStopBehavior.StopEmitting);
         }
 
+        private void OnDisable()
+        {
+            StopPour();
+            flightQueue.Flush();
+        }
+
         private void OnDestroy()
         {
+            flightQueue.Flush();
             if (runtimeStreamMaterial == null) return;
             if (Application.isPlaying) Destroy(runtimeStreamMaterial);
             else DestroyImmediate(runtimeStreamMaterial);
